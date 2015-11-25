@@ -1,0 +1,97 @@
+---
+- hosts: server
+  sudo: true
+  user: vagrant
+  tasks:
+    - name: change timezone
+      command: cp -p /usr/share/zoneinfo/Japan /etc/localtime
+    - name: remove all rules from iptables
+      command: /sbin/iptables -F
+    - name: iptables stop
+      command: /sbin/service iptables stop
+    - name: iptables off
+      command: /sbin/chkconfig iptables off
+    # install httpd
+    - name: install httpd
+      yum: name=httpd state=present
+      notify:
+        - copy httpd.conf
+        - enable launch settings
+    # install latest version git
+    - name: install dependency packages
+      yum: pkg={{item}} state=present
+      with_items:
+        - curl-devel
+        - expat-devel
+        - gettext-devel
+        - openssl-devel
+        - zlib-devel
+        - perl-ExtUtils-MakeMaker
+    - stat: path=/usr/local/src/git
+      register: git_repo
+    - name: temporary install old version git
+      yum: name=git state=present
+      when: not git_repo.stat.exists
+    - name: clone(or pull) latest version git
+      git: repo=https://git.kernel.org/pub/scm/git/git.git dest=/usr/local/src/git
+    - name: remove old git
+      yum: name=git state=absent
+      when: not git_repo.stat.exists
+    - name: compile git
+      shell: "{{ item }}"
+      args:
+        chdir: /usr/local/src/git
+      with_items:
+        - make prefix=/usr/local all
+        - make prefix=/usr/local install
+    # install php5.6
+    - name: install epel
+      yum: name=http://ftp.iij.ad.jp/pub/linux/fedora/epel/6/x86_64/epel-release-6-8.noarch.rpm state=present
+    - name: install remi
+      yum: name=http://rpms.famillecollet.com/enterprise/remi-release-6.rpm state=present
+    - name: install php & packages (& dependencies)
+      yum: pkg={{item}} state=present enablerepo=remi,remi-php56
+      with_items:
+        - php
+        - php-common
+        - php-cli
+      notify: copy php.ini
+    - name: install latest version curl
+      yum: pkg={{item}} state=present
+      with_items:
+        - http://www.city-fan.org/ftp/contrib/yum-repo/city-fan.org-release-1-13.rhel6.noarch.rpm
+        - libcurl
+    # install FuelPHP
+    - stat: path=/usr/local/src/fuelphp-1.7.3.zip
+      register: fuelphp_zip
+    - name: download fuelphp1.7.3
+      get_url: url=http://fuelphp.com/files/download/34 dest=/usr/local/src/fuelphp-1.7.3.zip
+      when: not fuelphp_zip.stat.exists
+    - stat: path=/srv/example/fuelphp
+      register: fuelphp
+    - name: create target directory
+      command: mkdir -p /srv/example
+    - name: unzip fuelphp
+      command: unzip -o /usr/local/src/fuelphp-1.7.3.zip -d /srv/example
+      when: not fuelphp.stat.exists
+    - name: rename unzip directory
+      command: mv fuelphp-1.7.3 fuelphp
+      args:
+        chdir: /srv/example/
+      when: not fuelphp.stat.exists
+    - name: install oil
+      shell: get.fuelphp.com/oil | sh
+    - name: refine install
+      command: php oil refine install
+      args:
+        chdir: /srv/example/fuelphp
+      notify: restart httpd
+  handlers:
+    - name: copy httpd.conf
+      copy: src=../httpd.conf dest=/etc/httpd/conf/httpd.conf
+    - name: enable launch settings
+      command: /sbin/chkconfig httpd on
+    - name: copy php.ini
+      copy: src=../php.ini dest=/etc/php.ini
+    - name: restart httpd
+      service: name=httpd state=restarted
